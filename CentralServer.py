@@ -333,12 +333,21 @@ async def request_client(data: dict):
     # Mark this as an active, intentional session
     active_sessions[str(requested_uuid)] = True
    
-    # Update database
+    # Update database (this will trigger MongoDB Change Stream on client side)
     await collection.update_one(
         {"uuid": requested_uuid},
         {"$set": {"Status": "Running", "connection": True}}
     )
    
+    # BETTER APPROACH: Push notification via Socket.IO (client listens via on_start_client)
+    # This allows client to start without polling MongoDB
+    print(f"[REQUEST] Emitting 'start_client' push notification to SID: {sid}")
+    await sio.emit("start_client", {
+        "uuid": requested_uuid,
+        "key": key
+    }, to=sid)
+    
+    # ALSO emit legacy client_info for backward compatibility
     print(f"[REQUEST] Emitting client_info to SID: {sid}")
     await sio.emit("client_info", {
         "local_ip": local_ip,
@@ -366,12 +375,6 @@ async def start_monitor(data: dict):
     if not requested_uuid:
         raise HTTPException(status_code=400, detail="UUID is required")
    
-    # Check if client exists in database
-    # client_info = await collection.find_one({"uuid": requested_uuid}, {"_id": 0})
-   
-    # if not client_info:
-        # raise HTTPException(status_code=404, detail="Client not found in database")
-   
     # Check if client is connected via Socket.IO
     sid = uuid_sid_map.get(str(requested_uuid))
    
@@ -382,13 +385,8 @@ async def start_monitor(data: dict):
     # Mark this as an active session
     active_sessions[str(requested_uuid)] = True
    
-    # Update database to indicate monitoring should start
-    # await collection.update_one(
-    #     {"uuid": requested_uuid},
-    #     {"$set": {"connection": True}}
-    # )
-   
-    # Emit event to client to start checking live status
+    # OPTION 1: Push notification via Socket.IO (BEST - No MongoDB polling needed)
+    # This is more efficient than waiting for client to poll MongoDB
     print(f"[START_MONITOR] Emitting 'check_live_status_start' to SID: {sid}")
     await sio.emit("check_live_status_start", {
         "uuid": requested_uuid,
